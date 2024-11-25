@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GeoFS Streetlights
-// @version      0.1
+// @version      0.2
 // @description  Uses OSM to add street lights on the edges of roads
 // @author       GGamerGGuy
 // @match        https://geo-fs.com/geofs.php*
@@ -84,6 +84,7 @@ const workerScript = () => {
                 });
             }
         });
+        self.postMessage({type: "streetLightsFinished"});
     };
     // Worker thread (in worker.js)
     function calculateDistance(coord1, coord2) {
@@ -186,35 +187,177 @@ const workerScript = () => {
 (function() {
     'use strict';
     window.roads = [];
+    //I have forgotten what most of these position arrays are for
     window.rPos = [];
     window.fPos = [];
+    window.slPos = []; //Instancing positions
+    window.slOri = []; //Instancing orientations
     window.allSPos = []; //All Streetlight Positions
-    window.isStLtOn = true;
+    if (localStorage.getItem('stLtEnabled')) {
+        window.isStLtOn = localStorage.getItem('stLtEnabled');
+    } else {
+        localStorage.setItem('stLtEnabled', 'true');
+        window.isStLtOn = 'true';
+    }
+    if (localStorage.getItem('stLtRenderDist') == null) {
+        localStorage.setItem('stLtRenderDist', '0.003');
+    }
+    if (localStorage.getItem('stLtUpdateInterval') == null) {
+        localStorage.setItem('stLtUpdateInterval', '5');
+    }
     window.rdslastBounds;
     window.slLOD = false;
     window.ltTO = 0; //lightTimeOut, sets the timeout for light placing to hopefully reduce freezing
     window.streetLightWorker = new Worker(URL.createObjectURL(new Blob([`(${workerScript})()`], { type: 'application/javascript' })));
     window.streetLightWorker.addEventListener('message', function(event) {
         if (event.data.type == "addStreetlight") {
-            addStreetlight(event.data.data[0], event.data.data[1]);
+            // addStreetlight(event.data.data[0], event.data.data[1]);
+
+
+            const position = event.data.data[0];
+            const heading = event.data.data[1];
+            const apos = [position[1], position[0], window.geofs.api.viewer.scene.globe.getHeight(window.Cesium.Cartographic.fromDegrees(position[1], position[0]))];
+            const pos = window.Cesium.Cartesian3.fromDegrees(apos[0], apos[1], apos[2]);
+            window.slPos.push(pos);
+
+            // Adjust orientation based on the heading
+            const hpr = new window.Cesium.HeadingPitchRoll(heading, 0, 0);
+            const ori = window.Cesium.Transforms.headingPitchRollQuaternion(pos, hpr);
+            window.slOri.push(ori);
+
+
         } else if (event.data.type == "removeCloseStreetLights") {
+            console.log("Chat, I'm cooked");
             removeStreetLights(event.data.data);
+        } else if (event.data.type == "streetLightsFinished") {
+            instanceStLts();
         }
     });
     setInterval(() => {
         window.doRoads();
         setTimeout(() => {window.streetLightLOD();}, 3500);
-    }, 8000);
+    }, 1000*Number(localStorage.getItem('stLtUpdateInterval')));
+    window.addEventListener('load', function(event) {
+        setTimeout(() => {
+            stLtInit();
+        }, 500);
+    });
 })();
+
+function stLtInit() { //Initializes the menu
+    /*<div id="gmenu" class="mdl-button mdl-js-button geofs-f-standard-ui" style="
+    padding: 0px;
+" onclick="window.ggamergguy.toggleMenu()"><img src="https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/s_icon.png" style=":;/: 0px;width: 30px;"></div>*/
+    if (!window.ggamergguy) {
+        window.ggamergguy = {};
+        var bottomDiv = document.getElementsByClassName('geofs-ui-bottom')[0];
+        window.ggamergguy.btn = document.createElement('div');
+
+        window.ggamergguy.btn.id = "gmenu";
+        window.ggamergguy.btn.classList = "mdl-button mdl-js-button geofs-f-standard-ui"
+
+        window.ggamergguy.btn.style.padding = "0px";
+
+        bottomDiv.appendChild(window.ggamergguy.btn);
+        window.ggamergguy.btn.innerHTML = `<img src="https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/s_icon.png" style="width: 30px">`;
+        document.getElementById("gmenu").onclick = function() {window.ggamergguy.toggleMenu();};
+    } //End if (!window.ggamergguy)
+    if (!window.ggamergguy.toggleMenu) {
+        window.ggamergguy.toggleMenu = function() {
+            if (window.ggamergguy.menuDiv.style.display == "none") {
+                window.ggamergguy.menuDiv.style.display = "block";
+                //set the values to the menu
+                for (let i in window.ggamergguy.tM) {
+                    window.ggamergguy.tM[i]();
+                }
+            } else {
+                window.ggamergguy.menuDiv.style.display = "none";
+            } //End if-else (window.ggamergguy.menuDiv.classList.length == 5)
+        };
+    } //End if (!window.ggamergguy.toggleMenu)
+    if (!window.ggamergguy.menuDiv) {
+        /*<div id="ggamergguy" class="geofs-list geofs-toggle-panel geofs-preference-list geofs-preferences" style="
+    z-index: 100;
+    position: fixed;
+    display: block;
+    width: 40%;
+"></div>*/
+        window.ggamergguy.menuDiv = document.createElement('div');
+
+        window.ggamergguy.menuDiv.id = "ggamergguyDiv";
+        window.ggamergguy.menuDiv.classList = "geofs-list geofs-toggle-panel geofs-preference-list geofs-preferences";
+
+        window.ggamergguy.menuDiv.style.zIndex = "100";
+        window.ggamergguy.menuDiv.style.position = "fixed";
+        window.ggamergguy.menuDiv.style.width = "40%";
+        document.body.appendChild(window.ggamergguy.menuDiv);
+    } //End if (!window.ggamergguy.menuDiv)
+    if (!window.ggamergguy.menuContents) {
+        window.ggamergguy.menuContents = `
+                <div id="stLts">
+<h2>Streetlights Settings</h2><span>Enabled: </span>
+<input id="stLtEnabled" type="checkbox" onchange="localStorage.setItem('stLtEnabled', this.checked)" style="
+    width: 5%;
+    height: 5%;
+"><br>
+<span>Render distance (degrees): </span>
+<input id="stLtRenderDist" type="number" onchange="localStorage.setItem('stLtRenderDist', this.value)"><br>
+<span>Update Interval (seconds): </span>
+<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)">
+</div>
+            `;
+        window.ggamergguy.menuDiv.innerHTML = window.ggamergguy.menuContents;
+        function t() {
+            let a = document.getElementById("stLtEnabled");
+            let b = document.getElementById("stLtRenderDist");
+            let c = document.getElementById("stLtUpdateInterval");
+            a.checked = (localStorage.getItem("stLtEnabled") == 'true');
+            b.value = Number(localStorage.getItem("stLtRenderDist"));
+            c.value = Number(localStorage.getItem("stLtUpdateInterval"));
+        }
+        if (!window.ggamergguy.tM) {
+            window.ggamergguy.tM = [];
+        }
+        window.ggamergguy.tM.push(t);
+    } else { //End if, start else (!window.ggamergguy.menuContents)
+        window.ggamergguy.menuContents += `
+                <div id="stLts">
+<h2>Streetlights Settings</h2><span>Enabled: </span>
+<input id="stLtEnabled" type="checkbox" onchange="localStorage.setItem('stLtEnabled', this.checked)" style="
+    width: 5%;
+    height: 5%;
+"><br>
+<span>Render distance (degrees): </span>
+<input id="stLtRenderDist" type="number" onchange="localStorage.setItem('stLtRenderDist', this.value)"><br>
+<span>Update Interval (seconds): </span>
+<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)">
+</div>
+            `;
+        window.ggamergguy.menuDiv.innerHTML = window.ggamergguy.menuContents;
+        function t() {
+            let a = document.getElementById("stLtEnabled");
+            let b = document.getElementById("stLtRenderDist");
+            let c = document.getElementById("stLtUpdateInterval");
+            a.checked = (localStorage.getItem("stLtEnabled") == 'true');
+            b.value = Number(localStorage.getItem("stLtRenderDist"));
+            c.value = Number(localStorage.getItem("stLtUpdateInterval"));
+        }
+        if (!window.ggamergguy.tM) {
+            window.ggamergguy.tM = [];
+        }
+        window.ggamergguy.tM.push(t);
+    } //End if-else (!window.ggamerguy.menuContents)
+} //End function stLtInit()
+
 window.streetLightLOD = async function() {
     var ldgAGL = (window.geofs.animation.values.altitude !== undefined && window.geofs.animation.values.groundElevationFeet !== undefined) ? ((window.geofs.animation.values.altitude - window.geofs.animation.values.groundElevationFeet) + (window.geofs.aircraft.instance.collisionPoints[window.geofs.aircraft.instance.collisionPoints.length - 2].worldPosition[2]*3.2808399)) : 'N/A';
     var i;
-    if (ldgAGL > 3000 && !window.slLOD) {
+    if ((ldgAGL > 3000 || window.weather.timeRatio < 0.5) && !window.slLOD) {
         window.slLOD = true;
         for (i = 0; i < window.roads.length; i++) {
             window.roads[i].model.uri = "https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/streetlight_lod.glb";
         }
-    } else if (ldgAGL <= 3000 && window.slLOD) {
+    } else if ((ldgAGL <= 3000 && window.weather.timeRatio >= 0.5) && window.slLOD) {
         window.slLOD = false;
         for (i = 0; i < window.roads.length; i++) {
             window.roads[i].model.uri = "https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/streetlight_coned.glb";
@@ -222,25 +365,42 @@ window.streetLightLOD = async function() {
     }
 };
 window.doRoads = async function() {
+    if (localStorage.getItem('stLtEnabled')) {
+        window.isStLtOn = localStorage.getItem('stLtEnabled');
+    } else {
+        localStorage.setItem('stLtEnabled', 'true');
+        window.isStLtOn = 'true';
+    }
     window.ltTO = 0;
     var ldgAGL = (window.geofs.animation.values.altitude !== undefined && window.geofs.animation.values.groundElevationFeet !== undefined) ? ((window.geofs.animation.values.altitude - window.geofs.animation.values.groundElevationFeet) + (window.geofs.aircraft.instance.collisionPoints[window.geofs.aircraft.instance.collisionPoints.length - 2].worldPosition[2]*3.2808399)) : 'N/A';
-    if (window.geofs.cautiousWithTerrain == false && (window.isStLtOn) && ldgAGL < 3000) {
-        var renderDistance = 0.003; // Render distance, in degrees.
+    if (window.geofs.cautiousWithTerrain == false && (window.isStLtOn == 'true') && ldgAGL < 3000) {
+        var renderDistance = Number(localStorage.getItem('stLtRenderDist')); // Render distance, in degrees.
         var l0 = Math.floor(window.geofs.aircraft.instance.llaLocation[0] / renderDistance) * renderDistance;
         var l1 = Math.floor(window.geofs.aircraft.instance.llaLocation[1] / renderDistance) * renderDistance;
         window.bounds = (l0) + ", " + (l1) + ", " + (l0 + renderDistance) + ", " + (l1 + renderDistance);
         if (!window.rdslastBounds || (window.rdslastBounds != window.bounds)) {
             // Remove existing roads
-            for (var i = 0; i < window.roads.length; i++) {
-                window.geofs.api.viewer.entities.remove(window.roads[i]);
+            for (let i = 0; i < window.roads.length; i++) {
+                window.geofs.api.viewer.scene.primitives.remove(window.roads[i]);
             }
             window.roads = [];
+            window.slPos = [];
+            window.slOri = [];
             console.log("Roads removed, placing new ones");
             // Place new roads
             console.log("bounds: " + window.bounds);
             window.streetLightWorker.postMessage({type: "fetchRoadData", data: window.bounds});
         }
         window.rdslastBounds = window.bounds;
+    } else if (window.geofs.cautiousWithTerrain == false && (window.stLtOn == 'false')) { //If the StLt isn't on
+        // Remove existing roads
+        window.rdslastBounds = "";
+        for (let i = 0; i < window.roads.length; i++) {
+            window.geofs.api.viewer.scene.primitives.remove(window.roads[i]);
+        }
+        window.roads = [];
+        window.slPos = [];
+        window.slOri = [];
     }
 };
 
@@ -270,6 +430,27 @@ function calculateDistance(coord1, coord2) {
 
     return earthRadius * c;
 }
+
+async function instanceStLts() {
+    const modelMatrices = window.slPos.map((position, index) => {
+        const translationMatrix = /*window.Cesium.Transforms.northEastDownToFixedFrame*/window.Cesium.Matrix4.fromTranslation(position);
+
+        // Convert quaternion to rotation matrix
+        const rotationMatrix = window.Cesium.Matrix3.fromQuaternion(window.slOri[index]);
+
+        // Apply rotation to translation
+        return window.Cesium.Matrix4.multiplyByMatrix3(translationMatrix, rotationMatrix, new window.Cesium.Matrix4());
+    });
+    console.log(modelMatrices);
+    window.roads.push(window.geofs.api.viewer.scene.primitives.add(
+        new window.Cesium.ModelInstanceCollection({
+            url: "https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/streetlight_coned.glb",
+            instances: modelMatrices.map((matrix) => ({ modelMatrix: matrix })),
+        })
+    )
+    );
+}
+
 async function addStreetlight(position, heading) {
     window.ltTO += 1;
     setTimeout(() => {
