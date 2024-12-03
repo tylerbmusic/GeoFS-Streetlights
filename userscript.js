@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GeoFS Streetlights
-// @version      0.2
+// @version      0.3pre1
 // @description  Uses OSM to add street lights on the edges of roads
 // @author       GGamerGGuy
 // @match        https://geo-fs.com/geofs.php*
@@ -49,7 +49,7 @@ const workerScript = () => {
                 // Calculate angle of the segment for orientation
                 const angle = Math.atan2(segmentEnd[1] - segmentStart[1], segmentEnd[0] - segmentStart[0]);
 
-                const interpolatedPoints = interpolatePoints(segmentStart, segmentEnd, 60 / 111000); // 60 meters, converted to degrees
+                const interpolatedPoints = interpolatePoints(segmentStart, segmentEnd, Number(localStorage.gettItem('stLtDist')) / 111000); // 60 meters by default, converted to degrees
 
                 interpolatedPoints.forEach(point => {
                     // Offset points to the left and right of the road centerline
@@ -205,6 +205,9 @@ const workerScript = () => {
     if (localStorage.getItem('stLtUpdateInterval') == null) {
         localStorage.setItem('stLtUpdateInterval', '5');
     }
+    if (localStorage.getItem('stLtDist') == null) {
+        localStorage.setItem('stLtDist', '60');
+    }
     window.rdslastBounds;
     window.slLOD = false;
     window.ltTO = 0; //lightTimeOut, sets the timeout for light placing to hopefully reduce freezing
@@ -303,7 +306,14 @@ function stLtInit() { //Initializes the menu
 <span>Render distance (degrees): </span>
 <input id="stLtRenderDist" type="number" onchange="localStorage.setItem('stLtRenderDist', this.value)"><br>
 <span>Update Interval (seconds): </span>
-<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)">
+<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)"><br>
+<span>Distance between Streetlights (meters): </span>
+<input id="stLtDist" type="number" onchange="localStorage.setItem('stLtDist', this.value)">
+<div style="
+    background: darkgray;
+    height: 2px;
+    margin: 10px;
+"></div>
 </div>
             `;
         window.ggamergguy.menuDiv.innerHTML = window.ggamergguy.menuContents;
@@ -311,9 +321,11 @@ function stLtInit() { //Initializes the menu
             let a = document.getElementById("stLtEnabled");
             let b = document.getElementById("stLtRenderDist");
             let c = document.getElementById("stLtUpdateInterval");
+            let d = document.getElementById("stLtDist");
             a.checked = (localStorage.getItem("stLtEnabled") == 'true');
             b.value = Number(localStorage.getItem("stLtRenderDist"));
             c.value = Number(localStorage.getItem("stLtUpdateInterval"));
+            d.value = Number(localStorage.getItem("stLtDist"));
         }
         if (!window.ggamergguy.tM) {
             window.ggamergguy.tM = [];
@@ -330,7 +342,14 @@ function stLtInit() { //Initializes the menu
 <span>Render distance (degrees): </span>
 <input id="stLtRenderDist" type="number" onchange="localStorage.setItem('stLtRenderDist', this.value)"><br>
 <span>Update Interval (seconds): </span>
-<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)">
+<input id="stLtUpdateInterval" type="number" onchange="localStorage.setItem('stLtUpdateInterval', this.value)"><br>
+<span>Distance between Streetlights (meters): </span>
+<input id="stLtDist" type="number" onchange="localStorage.setItem('stLtDist', this.value)">
+<div style="
+    background: darkgray;
+    height: 2px;
+    margin: 10px;
+"></div>
 </div>
             `;
         window.ggamergguy.menuDiv.innerHTML = window.ggamergguy.menuContents;
@@ -338,9 +357,11 @@ function stLtInit() { //Initializes the menu
             let a = document.getElementById("stLtEnabled");
             let b = document.getElementById("stLtRenderDist");
             let c = document.getElementById("stLtUpdateInterval");
+            let d = document.getElementById("stLtDist");
             a.checked = (localStorage.getItem("stLtEnabled") == 'true');
             b.value = Number(localStorage.getItem("stLtRenderDist"));
             c.value = Number(localStorage.getItem("stLtUpdateInterval"));
+            d.value = Number(localStorage.getItem("stLtDist"));
         }
         if (!window.ggamergguy.tM) {
             window.ggamergguy.tM = [];
