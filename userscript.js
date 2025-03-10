@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         GeoFS Streetlights
-// @version      0.3
+// @version      0.4
 // @description  Uses OSM to add street lights on the edges of roads
 // @author       GGamerGGuy
 // @match        https://geo-fs.com/geofs.php*
@@ -39,7 +39,13 @@ const workerScript = () => {
 
         return [offsetLat, offsetLon];
     }
-    const updateRoads = async function(coords, stLtDist) { //todo
+    function inCoords(a, b) { //checks if A is in B.
+        if ((a[0] >= b[0] && a[0] <= b[2]) && (a[1] >= b[1] && a[1] <= b[3])) {
+            return true;
+        }
+        return false;
+    }
+    const updateRoads = async function(coords, stLtDist, airportBounds) {
         var allSPos = [];
         coords.forEach(road => {
             for (let i = 0; i < road.length - 1; i++) {
@@ -70,16 +76,27 @@ const workerScript = () => {
                     }
 
                     // Add streetlights at the left point
-                    //console.log([leftPoint, rightPoint]);
                     if (shouldSendL) {
                         allSPos.push(leftPoint);
-                        self.postMessage({type: "addStreetlight", data: [leftPoint, angle]});
+                        let b = false;
+                        for (let i in airportBounds) {
+                            if (inCoords(leftPoint, airportBounds[i])) {
+                                b = true;
+                            }
+                        }
+                        self.postMessage({type: ((!b) ? "addStreetlight" : "addFloodlight"), data: [leftPoint, angle]});
                     }
 
                     // Add streetlights at the right point
                     if (shouldSendR) {
                         allSPos.push(rightPoint);
-                        self.postMessage({type: "addStreetlight", data: [rightPoint, angle + Math.PI]});
+                        let b = false;
+                        for (let i in airportBounds) {
+                            if (inCoords(rightPoint, airportBounds[i])) {
+                                b = true;
+                            }
+                        }
+                        self.postMessage({type: ((!b) ? "addStreetlight" : "addFloodlight"), data: [rightPoint, angle + Math.PI]});
                     }
                 });
             }
@@ -152,17 +169,50 @@ const workerScript = () => {
         return roads;
     }
     ///
+    async function getAirportBounds(bounds) {
+        const q = `
+        [out:json];
+        (
+        nwr(around:20000, ${bounds[0]}, ${bounds[1]})["aeroway"="aerodrome"];
+        );
+        out geom;
+        `;
+        const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(q)}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        var ret = [];
+        let b, d;
+        for (let i = 0; i < data.elements.length; i++) {
+            d = data.elements[i];
+            if (d.bounds) {
+                b = d.bounds;
+                ret.push([b.minlat, b.minlon, b.maxlat, b.maxlon]);
+            }
+        }
+        return ret;
+    }
     self.addEventListener('message', async function(event) {
         if (event.data.type == 'fetchRoadData') {
             console.log("Fetching Road Data...");
             const bounds = event.data.data[0];
             const stLtDist = event.data.data[1];
             console.log("received bounds: " + bounds);
+            var airportBounds = getAirportBounds(bounds.split(", "));
             const query = `
     [out:json];
-    way[highway][!aeroway][!building](${bounds}); // Filter to avoid airport taxiways and buildings
-    (._;>;);
-    out body;
+(
+  way[highway=motorway](${bounds});
+  way[highway=trunk](${bounds});
+  way[highway=primary](${bounds});
+  way[highway=secondary](${bounds});
+  way[highway=tertiary](${bounds});
+  way[highway=residential](${bounds});
+  way[highway=service](${bounds});
+  way[highway=escape](${bounds});
+  way[highway=raceway](${bounds});
+);
+(._;>;);
+out body;
     `;
             const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
@@ -174,8 +224,9 @@ const workerScript = () => {
 
                 const data = await response.json();
                 const coordinates = extractCoordinates(data);
-                console.log('Road coordinates:', coordinates);
-                updateRoads(coordinates, stLtDist);
+                var aB;
+                await airportBounds.then((r) => {aB = r});
+                updateRoads(coordinates, stLtDist, aB);
             } catch (error) {
                 console.error('Error:', error);
             }
@@ -194,6 +245,8 @@ const workerScript = () => {
     window.fPos = [];
     window.slPos = []; //Instancing positions
     window.slOri = []; //Instancing orientations
+    window.fldPos = []; //Floodlight positions
+    window.fldOri = []; //Floodlight orientations
     window.allSPos = []; //All Streetlight Positions
     /*if (localStorage.getItem('stLtEnabled')) {
         window.isStLtOn = localStorage.getItem('stLtEnabled');
@@ -216,7 +269,6 @@ const workerScript = () => {
     window.streetLightWorker = new Worker(URL.createObjectURL(new Blob([`(${workerScript})()`], { type: 'application/javascript' })));
     window.streetLightWorker.addEventListener('message', function(event) {
         if (event.data.type == "addStreetlight") {
-            // addStreetlight(event.data.data[0], event.data.data[1]);
 
 
             const position = event.data.data[0];
@@ -231,12 +283,25 @@ const workerScript = () => {
             window.slOri.push(ori);
 
 
+        } else if (event.data.type == "addFloodlight") {
+            const position = event.data.data[0];
+            const heading = event.data.data[1];
+            const apos = [position[1], position[0], window.geofs.api.viewer.scene.globe.getHeight(window.Cesium.Cartographic.fromDegrees(position[1], position[0]))];
+            const pos = window.Cesium.Cartesian3.fromDegrees(apos[0], apos[1], apos[2]);
+            window.fldPos.push(pos);
+
+            // Adjust orientation based on the heading
+            const hpr = new window.Cesium.HeadingPitchRoll(heading, 0, 0);
+            const ori = window.Cesium.Transforms.headingPitchRollQuaternion(pos, hpr);
+            window.fldOri.push(ori);
+
         } else if (event.data.type == "removeCloseStreetLights") {
             console.log("Chat, I'm cooked");
             removeStreetLights(event.data.data);
         } else if (event.data.type == "streetLightsFinished") {
             console.log("streetLightsFinished");
             instanceStLts();
+            instanceFldLts();
         }
     });
     if (!window.gmenu || !window.GMenu) {
@@ -280,7 +345,7 @@ window.doRoads = async function() {
         var renderDistance = Number(localStorage.getItem('stLtRenderDist')); // Render distance, in degrees.
         var l0 = Math.floor(window.geofs.aircraft.instance.llaLocation[0] / renderDistance) * renderDistance;
         var l1 = Math.floor(window.geofs.aircraft.instance.llaLocation[1] / renderDistance) * renderDistance;
-        window.bounds = (l0) + ", " + (l1) + ", " + (l0 + renderDistance) + ", " + (l1 + renderDistance);
+        window.bounds = Math.round(l0*1000)/1000 + ", " + Math.round(l1*1000)/1000 + ", " + Math.round((l0 + renderDistance)*1000)/1000 + ", " + Math.round((l1 + renderDistance)*1000)/1000;
         if (!window.rdslastBounds || (window.rdslastBounds != window.bounds)) {
             // Remove existing roads
             for (let i = 0; i < window.roads.length; i++) {
@@ -289,6 +354,8 @@ window.doRoads = async function() {
             window.roads = [];
             window.slPos = [];
             window.slOri = [];
+            window.fldPos = [];
+            window.fldOri = [];
             console.log("Roads removed, placing new ones");
             // Place new roads
             console.log("bounds: " + window.bounds);
@@ -304,6 +371,8 @@ window.doRoads = async function() {
         window.roads = [];
         window.slPos = [];
         window.slOri = [];
+        window.fldPos = [];
+        window.fldOri = [];
     }
 };
 
@@ -344,10 +413,27 @@ async function instanceStLts() {
         // Apply rotation to translation
         return window.Cesium.Matrix4.multiplyByMatrix3(translationMatrix, rotationMatrix, new window.Cesium.Matrix4());
     });
-    console.log(modelMatrices);
     window.roads.push(window.geofs.api.viewer.scene.primitives.add(
         new window.Cesium.ModelInstanceCollection({
             url: "https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/streetlight_coned.glb",
+            instances: modelMatrices.map((matrix) => ({ modelMatrix: matrix })),
+        })
+    )
+                     );
+}
+async function instanceFldLts() {
+    const modelMatrices = window.fldPos.map((position, index) => {
+        const translationMatrix = /*window.Cesium.Transforms.northEastDownToFixedFrame*/window.Cesium.Matrix4.fromTranslation(position);
+
+        // Convert quaternion to rotation matrix
+        const rotationMatrix = window.Cesium.Matrix3.fromQuaternion(window.fldOri[index]);
+
+        // Apply rotation to translation
+        return window.Cesium.Matrix4.multiplyByMatrix3(translationMatrix, rotationMatrix, new window.Cesium.Matrix4());
+    });
+    window.roads.push(window.geofs.api.viewer.scene.primitives.add(
+        new window.Cesium.ModelInstanceCollection({
+            url: "https://raw.githubusercontent.com/tylerbmusic/GPWS-files_geofs/refs/heads/main/floodlight.glb",
             instances: modelMatrices.map((matrix) => ({ modelMatrix: matrix })),
         })
     )
